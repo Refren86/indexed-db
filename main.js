@@ -1,11 +1,12 @@
 import { uid } from "./uid.js";
+import { state } from "./data.js";
 
 const IDB = (function init() {
   let db = null;
   let objectStore = null;
 
   // the request, which creates indexedDB
-  let DBOpenReq = indexedDB.open("WhiskeyDB", 4);
+  let DBOpenReq = indexedDB.open("WhiskeyDB", 3);
 
   // three must have event listeners for indexedDB: error, success, upgradeneeded
   DBOpenReq.addEventListener("error", function (err) {
@@ -16,26 +17,61 @@ const IDB = (function init() {
   DBOpenReq.addEventListener("success", function (event) {
     // DB has successfully been opened, or we've upgraded it and opened it
     db = event.target.result;
-    buildWhiskeyList();
+
     console.log("Database has been opened...", event.target.result);
+
+    // load default testing data from a data file
+    if (typeof state !== "undefined") {
+      let transaction = makeTransaction("whiskeyStore");
+
+      transaction.oncomplete = (ev) => {
+        console.log("Transaction with getting test data completed...", ev);
+        buildWhiskeyList();
+      };
+
+      let store = transaction.objectStore("whiskeyStore");
+      let getAllRequest = store.getAll();
+
+      getAllRequest.onsuccess = (ev) => {
+        if (ev.target.result.length === 0) {
+          // if db is empty, add data
+          state.forEach((whiskeyObj) => {
+            let addReq = store.add(whiskeyObj);
+
+            addReq.addEventListener("success", (ev) => {
+              console.log("Whiskey added to DB object...", ev);
+            });
+
+            // transaction.abort() - kills the transaction
+
+            addReq.addEventListener("error", (err) => {
+              console.warn("Error adding whiskey to DB...", err);
+            });
+          });
+        }
+      };
+    } else {
+      buildWhiskeyList();
+    }
   });
 
   DBOpenReq.addEventListener("upgradeneeded", function (event) {
-    // Triggers when DB version is changed (here we can create/delete object stores)
+    // Triggers when DB version is changed (here we can create/delete object stores, modify indexes)
     console.log("Upgrade needed executing...", event);
     db = event.target.result;
 
-    // create objectStore only once
-    if (!db.objectStoreNames.contains("whiskeyStore")) {
-      // keypath is going to be inserted into the objects inside the object store (unique value for each of the objects)
-      objectStore = db.createObjectStore("whiskeyStore", { keyPath: "id" }); // id will be unique and required for each object
+    if (db.objectStoreNames.contains("whiskeyStore")) {
+      db.deleteObjectStore("whiskeyStore"); // if object store exists, delete it
     }
 
-    // db.createObjectStore("foobar");
-    // if objectStore "foobar" already exists, remove it
-    if (db.objectStoreNames.contains("foobar")) {
-      db.deleteObjectStore("foobar");
-    }
+    // keypath is going to be inserted into the objects inside the object store (unique value for each of the objects)
+    objectStore = db.createObjectStore("whiskeyStore", { keyPath: "id" }); // id will be unique and required for each object
+
+    // creating indexes for the object store (1st - index name, 2nd - keypath, 3rd - options)
+    objectStore.createIndex("nameIDX", "name", { unique: false }); // allows duplicates
+    objectStore.createIndex("countryIDX", "country", { unique: false });
+    objectStore.createIndex("ageIDX", "age", { unique: false });
+    objectStore.createIndex("editIDX", "lastEdit", { unique: false });
   });
 
   // ADD NEW ITEM TO DB
@@ -51,6 +87,7 @@ const IDB = (function init() {
       country: country.value.trim(),
       age: age.value.trim(),
       isOwned: isOwned.checked,
+      lastEdit: Date.now(),
     };
 
     // step 2: open a transaction (1st - object store name, 2nd - mode read/write)
@@ -89,6 +126,7 @@ const IDB = (function init() {
         country: country.value.trim(),
         age: age.value.trim(),
         isOwned: isOwned.checked,
+        lastEdit: Date.now(),
       };
 
       let transaction = makeTransaction("whiskeyStore");
@@ -128,6 +166,7 @@ const IDB = (function init() {
 
       let store = transaction.objectStore("whiskeyStore");
       let request = store.delete(key); // will delete the record with the key
+      // to remove all data from indexedDB, use .clear() method
 
       request.addEventListener("success", function (event) {
         console.log("Whiskey was deleted in DB...", event);
@@ -146,9 +185,16 @@ const IDB = (function init() {
     };
 
     let store = transaction.objectStore("whiskeyStore");
-    let getReq = store.getAll();
+    // let getReq = store.getAll();
     // this will get all the records from the whiskeyStore as array
     // optional parameter for getAll is key or keyRange
+
+    // for ranges refer to: https://developer.mozilla.org/en-US/docs/Web/API/IDBKeyRange
+    const range = IDBKeyRange.lowerBound(14); // gets all records with age >= 5
+
+    // Getting all data by index (data is sorted)
+    let idx = store.index("ageIDX");
+    let getReq = idx.getAll(range); 
 
     getReq.addEventListener("success", function (event) {
       // getAll was successful
